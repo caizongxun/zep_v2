@@ -75,14 +75,11 @@ def plot_candlestick(df: pd.DataFrame, title: str, indicators: list = None, trad
             ))
         # Exits (SL/TP)
         exits = trades[trades['type'].isin(['SL', 'TP'])]
-        # For visualization, we need price of exit. Backtest engine stores pnl but maybe not price in trade list explicitly?
-        # Let's adjust backtest engine or just plot markers on time.
-        # Plotting simple exit markers for now
         if not exits.empty:
              fig.add_trace(go.Scatter(
-                x=exits['time'], y=[0]*len(exits), # Placeholder Y, usually we want exit price
+                x=exits['time'], y=[0]*len(exits), 
                 mode='markers', marker=dict(symbol='x', size=8, color='red'),
-                name='出場 (SL/TP)'
+                name='出場'
             ))
 
     fig.update_layout(
@@ -126,10 +123,11 @@ with tab1:
         risk_reward = st.number_input("盈虧比 (Risk/Reward)", value=2.0, step=0.1)
         pipeline.model_b.risk_reward_ratio = risk_reward
         
-        if st.button("訓練模型 A (1H 趨勢)"):
-            with st.spinner("正在載入數據並訓練模型 A..."):
+        # Changed button text and behavior
+        if st.button("訓練雙模型系統 (Model A & B)"):
+            with st.spinner("正在執行雙階段訓練流程..."):
                 pipeline.run_training()
-            st.success("模型 A 訓練完成！")
+            st.success("模型 A (趨勢) 與 模型 B (執行) 皆訓練完成！")
 
         if st.button("執行分析與生成訊號"):
             with st.spinner("正在獲取數據並進行推論..."):
@@ -142,8 +140,12 @@ with tab1:
             
             # Trend Display
             if not pipeline.df_1h.empty:
-                latest_pred = pipeline.model_a.predict(pipeline.df_1h.tail(1))
-                bias = latest_pred[0]
+                # Need to run predict again or cache it, run_inference prints it but we want to show it
+                # For UI update we re-predict just the bias
+                input_data = pipeline.df_1h.tail(100).copy()
+                latest_pred = pipeline.model_a.predict(input_data)
+                bias = latest_pred[-1]
+                
                 trend_text = "看漲 (BULLISH)" if bias == 1 else "看跌 (BEARISH)"
                 trend_color = "green" if bias == 1 else "red"
                 st.markdown(f"### 模型 A 趨勢預測: :{trend_color}[{trend_text}]")
@@ -182,14 +184,12 @@ with tab2:
         st.subheader("回測參數")
         bt_days = st.number_input("回測天數", min_value=1, max_value=365, value=30)
         bt_leverage = st.number_input("槓桿倍數", min_value=1.0, max_value=20.0, value=1.0)
-        bt_risk = st.slider("每筆交易倉位 (佔餘額 %)", 1, 100, 100) # Simple version: use full balance * leverage usually, or fixed risk. Keeping simple leverage logic.
+        bt_risk = st.slider("每筆交易倉位 (佔餘額 %)", 1, 100, 100)
         
         if st.button("開始回測"):
             engine = BacktestEngine(symbol, leverage=bt_leverage)
-            # Ensure model A is trained first ideally, or use naive rules. 
-            # For this demo, we assume user trained Model A in Tab 1 or we auto-train.
             if pipeline.df_1h.empty:
-                 with st.spinner("尚未訓練模型 A，正在自動訓練..."):
+                 with st.spinner("尚未訓練模型，正在自動訓練..."):
                      pipeline.run_training()
             
             with st.spinner(f"正在回測過去 {bt_days} 天的數據..."):
@@ -225,4 +225,4 @@ with tab2:
                 st.warning("無回測數據或期間內無交易。")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("v2.1.0 | 系統開發者: ZEP")
+st.sidebar.markdown("v2.2.0 | 系統開發者: ZEP")
