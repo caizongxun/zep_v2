@@ -2,19 +2,20 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from core.pipeline import TradingPipeline
+from core.backtest import BacktestEngine
 from utils.features import add_technical_indicators
 
 # Page Configuration
 st.set_page_config(
-    page_title="ZEP v2 Trading System",
+    page_title="ZEP v2 虛擬貨幣交易系統",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # --- Utilities ---
-def plot_candlestick(df: pd.DataFrame, title: str, indicators: list = None):
+def plot_candlestick(df: pd.DataFrame, title: str, indicators: list = None, trades: list = None):
     """
-    Creates a Plotly candlestick chart with optional indicators.
+    Creates a Plotly candlestick chart with optional indicators and trade markers.
     """
     if df.empty:
         return None
@@ -28,7 +29,7 @@ def plot_candlestick(df: pd.DataFrame, title: str, indicators: list = None):
         high=df['high'],
         low=df['low'],
         close=df['close'],
-        name='Price'
+        name='價格'
     ))
 
     # Add Indicators
@@ -45,19 +46,49 @@ def plot_candlestick(df: pd.DataFrame, title: str, indicators: list = None):
                 x=df['open_time'], 
                 y=df['bb_high'], 
                 line=dict(color='gray', width=1, dash='dot'), 
-                name='BB High'
+                name='BB 上軌'
             ))
              fig.add_trace(go.Scatter(
                 x=df['open_time'], 
                 y=df['bb_low'], 
                 line=dict(color='gray', width=1, dash='dot'), 
-                name='BB Low'
+                name='BB 下軌'
+            ))
+
+    # Add Trades
+    if trades is not None and not trades.empty:
+        # Long Entries
+        long_entries = trades[trades['type'] == 'OPEN_LONG']
+        if not long_entries.empty:
+             fig.add_trace(go.Scatter(
+                x=long_entries['time'], y=long_entries['price'],
+                mode='markers', marker=dict(symbol='triangle-up', size=10, color='blue'),
+                name='做多進場'
+            ))
+        # Short Entries
+        short_entries = trades[trades['type'] == 'OPEN_SHORT']
+        if not short_entries.empty:
+             fig.add_trace(go.Scatter(
+                x=short_entries['time'], y=short_entries['price'],
+                mode='markers', marker=dict(symbol='triangle-down', size=10, color='orange'),
+                name='做空進場'
+            ))
+        # Exits (SL/TP)
+        exits = trades[trades['type'].isin(['SL', 'TP'])]
+        # For visualization, we need price of exit. Backtest engine stores pnl but maybe not price in trade list explicitly?
+        # Let's adjust backtest engine or just plot markers on time.
+        # Plotting simple exit markers for now
+        if not exits.empty:
+             fig.add_trace(go.Scatter(
+                x=exits['time'], y=[0]*len(exits), # Placeholder Y, usually we want exit price
+                mode='markers', marker=dict(symbol='x', size=8, color='red'),
+                name='出場 (SL/TP)'
             ))
 
     fig.update_layout(
         title=title,
-        xaxis_title='Time',
-        yaxis_title='Price',
+        xaxis_title='時間',
+        yaxis_title='價格',
         height=600,
         template="plotly_dark"
     )
@@ -65,89 +96,133 @@ def plot_candlestick(df: pd.DataFrame, title: str, indicators: list = None):
 
 # --- Main Application ---
 
-st.title("ZEP v2: Hierarchical Trading System")
+st.title("ZEP v2: 分層式虛擬貨幣交易系統")
 
 # Sidebar Controls
-st.sidebar.header("Configuration")
+st.sidebar.header("系統配置")
 symbol = st.sidebar.selectbox(
-    "Select Symbol", 
+    "選擇交易對", 
     ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT", "XRPUSDT"]
 )
-
-model_a_horizon = st.sidebar.slider("Model A Horizon (Hours)", 1, 24, 1)
-risk_reward = st.sidebar.number_input("Risk/Reward Ratio", value=2.0, step=0.1)
-
-st.sidebar.markdown("---")
-st.sidebar.header("Actions")
 
 # Initialize Pipeline
 if 'pipeline' not in st.session_state or st.session_state.symbol != symbol:
     st.session_state.pipeline = TradingPipeline(symbol)
     st.session_state.symbol = symbol
-    st.sidebar.info(f"Initialized pipeline for {symbol}")
+    st.sidebar.info(f"已初始化 {symbol} 管道")
 
 pipeline = st.session_state.pipeline
-pipeline.model_b.risk_reward_ratio = risk_reward
 
-# Training Action
-if st.sidebar.button("Train Model A (1H Trend)"):
-    with st.spinner("Loading data and training Model A..."):
-        pipeline.run_training()
-    st.success("Model A training complete!")
+# Tabs
+tab1, tab2 = st.tabs(["即時訊號分析", "歷史回測系統"])
 
-# Inference Action
-if st.sidebar.button("Run Analysis & Generate Signal"):
-    with st.spinner("Fetching data and running inference..."):
-        signal = pipeline.run_inference()
+with tab1:
+    st.header("即時市場分析")
+    
+    col_a, col_b = st.columns([1, 3])
+    
+    with col_a:
+        st.subheader("控制面板")
+        risk_reward = st.number_input("盈虧比 (Risk/Reward)", value=2.0, step=0.1)
+        pipeline.model_b.risk_reward_ratio = risk_reward
         
-        # Display Results
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Model A: Trend Analysis (1H)")
+        if st.button("訓練模型 A (1H 趨勢)"):
+            with st.spinner("正在載入數據並訓練模型 A..."):
+                pipeline.run_training()
+            st.success("模型 A 訓練完成！")
+
+        if st.button("執行分析與生成訊號"):
+            with st.spinner("正在獲取數據並進行推論..."):
+                signal = pipeline.run_inference()
+                st.session_state.last_signal = signal
+    
+    with col_b:
+        if 'last_signal' in st.session_state:
+            signal = st.session_state.last_signal
+            
+            # Trend Display
             if not pipeline.df_1h.empty:
-                # Re-calculate bias to show user
                 latest_pred = pipeline.model_a.predict(pipeline.df_1h.tail(1))
                 bias = latest_pred[0]
-                trend_text = "BULLISH" if bias == 1 else "BEARISH"
+                trend_text = "看漲 (BULLISH)" if bias == 1 else "看跌 (BEARISH)"
                 trend_color = "green" if bias == 1 else "red"
-                st.markdown(f"### Predicted Trend: :{trend_color}[{trend_text}]")
-                
-                # Plot 1H Chart
-                fig_1h = plot_candlestick(pipeline.df_1h.tail(100), f"{symbol} 1H Trend Context", ['ema_50'])
-                st.plotly_chart(fig_1h, use_container_width=True)
+                st.markdown(f"### 模型 A 趨勢預測: :{trend_color}[{trend_text}]")
+            
+            # Signal Display
+            st.markdown("#### 模型 B 執行訊號 (15m)")
+            
+            sig_type = signal['signal'].upper()
+            if sig_type == 'HOLD':
+                st.info(f"當前動作: {sig_type} (等待機會)")
             else:
-                st.warning("1H Data not available. Train model first.")
-
-        with col2:
-            st.subheader("Model B: Execution (15m)")
+                st.success(f"當前動作: {sig_type}")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("進場價格", f"{signal['entry_price']:.2f}")
+                m2.metric("止損價格 (SL)", f"{signal['stop_loss']:.2f}")
+                m3.metric("止盈價格 (TP)", f"{signal['take_profit']:.2f}")
+            
+            # Chart
             if not pipeline.df_15m.empty:
-                st.write(f"**Action Signal:** {signal['signal'].upper()}")
+                fig_15m = plot_candlestick(pipeline.df_15m.tail(100), f"{symbol} 15m 執行視圖", ['ema_50', 'bb_high', 'bb_low'])
                 
-                if signal['signal'] != 'hold':
-                    st.success(f"Entry: {signal['entry_price']}")
-                    st.error(f"Stop Loss: {signal['stop_loss']}")
-                    st.info(f"Take Profit: {signal['take_profit']}")
-                else:
-                    st.info("Waiting for setup...")
-                
-                # Plot 15m Chart
-                fig_15m = plot_candlestick(pipeline.df_15m.tail(100), f"{symbol} 15m Execution View", ['ema_50', 'bb_high', 'bb_low'])
-                
-                # Add Entry Line if signal exists
+                # Add Lines
                 if signal['signal'] != 'hold':
                     fig_15m.add_hline(y=signal['entry_price'], line_color="blue", annotation_text="Entry")
                     fig_15m.add_hline(y=signal['stop_loss'], line_color="red", annotation_text="SL")
                     fig_15m.add_hline(y=signal['take_profit'], line_color="green", annotation_text="TP")
                 
                 st.plotly_chart(fig_15m, use_container_width=True)
+
+with tab2:
+    st.header("歷史回測系統")
+    
+    bc1, bc2 = st.columns([1, 3])
+    
+    with bc1:
+        st.subheader("回測參數")
+        bt_days = st.number_input("回測天數", min_value=1, max_value=365, value=30)
+        bt_leverage = st.number_input("槓桿倍數", min_value=1.0, max_value=20.0, value=1.0)
+        bt_risk = st.slider("每筆交易倉位 (佔餘額 %)", 1, 100, 100) # Simple version: use full balance * leverage usually, or fixed risk. Keeping simple leverage logic.
+        
+        if st.button("開始回測"):
+            engine = BacktestEngine(symbol, leverage=bt_leverage)
+            # Ensure model A is trained first ideally, or use naive rules. 
+            # For this demo, we assume user trained Model A in Tab 1 or we auto-train.
+            if pipeline.df_1h.empty:
+                 with st.spinner("尚未訓練模型 A，正在自動訓練..."):
+                     pipeline.run_training()
+            
+            with st.spinner(f"正在回測過去 {bt_days} 天的數據..."):
+                equity_curve, trades = engine.run(bt_days, pipeline.model_a, pipeline.model_b)
+                st.session_state.bt_results = (equity_curve, trades)
+    
+    with bc2:
+        if 'bt_results' in st.session_state:
+            equity_curve, trades = st.session_state.bt_results
+            
+            if equity_curve is not None and not equity_curve.empty:
+                # Metrics
+                initial = equity_curve.iloc[0]['equity']
+                final = equity_curve.iloc[-1]['equity']
+                roi = ((final - initial) / initial) * 100
+                drawdown = (equity_curve['equity'].cummax() - equity_curve['equity']).max()
                 
-                # Show Indicator Values
-                latest = pipeline.df_15m.iloc[-1]
-                st.metric("RSI (14)", f"{latest['rsi']:.2f}")
-                st.metric("MACD Diff", f"{latest['macd_diff']:.4f}")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("總回報率 (ROI)", f"{roi:.2f}%")
+                m2.metric("最終權益", f"${final:.2f}")
+                m3.metric("最大回撤", f"${drawdown:.2f}")
+                
+                # Equity Plot
+                fig_eq = go.Figure()
+                fig_eq.add_trace(go.Scatter(x=equity_curve['time'], y=equity_curve['equity'], mode='lines', name='權益曲線'))
+                fig_eq.update_layout(title="帳戶權益曲線", xaxis_title="時間", yaxis_title="金額 (USD)", template="plotly_dark")
+                st.plotly_chart(fig_eq, use_container_width=True)
+                
+                # Trades Table
+                st.subheader("交易紀錄")
+                st.dataframe(trades)
             else:
-                st.warning("15m Data not loaded.")
+                st.warning("無回測數據或期間內無交易。")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("v2.0.0 | Hierarchical Crypto Trading System")
+st.sidebar.markdown("v2.1.0 | 系統開發者: ZEP")
