@@ -7,3 +7,5 @@ numpy
 ta
 matplotlib
 seaborn
+streamlit
+plotly
