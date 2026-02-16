@@ -33,15 +33,25 @@ class TradingPipeline:
         2. Generate signal using Model B (15m) based on trend.
         """
         # --- Step 1: Model A Prediction ---
-        # In a real scenario, we would fetch fresh data here.
-        # For now, we assume self.df_1h is up-to-date.
         if self.df_1h.empty:
              self.df_1h = load_klines(self.symbol, "1h")
              
         # Predict trend for the *next* candle
-        # We need to make sure we are predicting on the LATEST available data point
-        latest_trend_prediction = self.model_a.predict(self.df_1h.tail(1))
-        bias = latest_trend_prediction[0] # 1 (Bullish) or 0 (Bearish)
+        # FIX: We need enough history to calculate indicators (e.g. 50+ candles)
+        # Passing only 1 row causes IndexError in TA library
+        history_window = 100 
+        input_data = self.df_1h.tail(history_window).copy()
+        
+        if len(input_data) < 50:
+            print("Not enough 1h data for inference.")
+            return {'signal': 'hold', 'reason': 'insufficient_data'}
+
+        # Get predictions for the chunk
+        # The model's predict() calls add_technical_indicators internally on this chunk
+        predictions = self.model_a.predict(input_data)
+        
+        # We only care about the prediction for the very last closed candle
+        bias = predictions[-1] 
         
         bias_str = "BULLISH" if bias == 1 else "BEARISH"
         print(f"Model A Prediction (1h): {bias_str}")
@@ -51,9 +61,10 @@ class TradingPipeline:
         self.df_15m = load_klines(self.symbol, "15m")
         if self.df_15m.empty:
             print("Failed to load 15m data.")
-            return
+            return {'signal': 'hold', 'reason': 'no_data'}
 
         # Add indicators to 15m data for Model B
+        # We also need enough history here
         self.df_15m = add_technical_indicators(self.df_15m)
         
         # Generate signal
