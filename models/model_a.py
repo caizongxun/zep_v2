@@ -12,6 +12,22 @@ class ModelA:
     def __init__(self):
         self.model = XGBClassifier(n_estimators=100, learning_rate=0.05, max_depth=5, random_state=42)
         
+    def _get_feature_columns(self, df: pd.DataFrame) -> list:
+        """
+        Helper to select only valid numeric feature columns.
+        """
+        # Exclude non-feature columns
+        exclude_cols = [
+            'open_time', 'close_time', 'ignore', 
+            'future_close', 'target_return', 'target_direction'
+        ]
+        
+        # Select numeric columns only
+        features = [col for col in df.columns if col not in exclude_cols]
+        # Double check to ensure we only have numeric types
+        numeric_features = df[features].select_dtypes(include=['number']).columns.tolist()
+        return numeric_features
+
     def prepare_data(self, df: pd.DataFrame):
         """
         Prepares data for training/inference.
@@ -28,7 +44,7 @@ class ModelA:
         df = add_target_model_a(df)
         
         # Select features
-        features = [col for col in df.columns if col not in ['open_time', 'close_time', 'future_close', 'target_return', 'target_direction']]
+        features = self._get_feature_columns(df)
         X = df[features]
         y = df['target_direction']
         
@@ -42,7 +58,7 @@ class ModelA:
         # Using time-series split (no shuffle)
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
         
-        print("Training Model A...")
+        print(f"Training Model A with features: {X.columns.tolist()}")
         self.model.fit(X_train, y_train)
         
         y_pred = self.model.predict(X_test)
@@ -53,18 +69,11 @@ class ModelA:
         """
         Predicts future direction based on input data.
         CRITICAL: Input 'df' should contain CLOSED candles.
-        If the last row is an open/incomplete candle, it should be removed before calling this,
-        OR the caller accepts that the prediction will fluctuate.
-        
-        For production safety, we assume input is history up to time T.
-        We predict T+1.
         """
         df = add_technical_indicators(df)
-        features = [col for col in df.columns if col not in ['open_time', 'close_time', 'future_close', 'target_return', 'target_direction']]
         
-        # Ensure we have the exact same features as training
-        # (In a real app, save/load feature names to ensure consistency)
-        # Here we just re-select based on the column logic
+        # Use same feature selection logic
+        features = self._get_feature_columns(df)
         X = df[features]
         
         return self.model.predict(X)
