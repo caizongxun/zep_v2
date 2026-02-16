@@ -56,6 +56,19 @@ df_eth_15m = load_klines("ETHUSDT", "15m")
    pip install -r requirements.txt
    ```
 
+## Running the GUI
+The project includes a Streamlit-based dashboard for easy interaction.
+
+```bash
+streamlit run app.py
+```
+
+This will launch a web interface where you can:
+- Select trading pairs
+- Train Model A (Trend Prediction)
+- Visualize 1H and 15M charts
+- Get real-time Buy/Sell signals based on the hierarchical logic
+
 ## Development Roadmap
 
 1. **Feature Engineering**: Implement technical indicators (RSI, MACD, Bollinger Bands) for both timeframes.
