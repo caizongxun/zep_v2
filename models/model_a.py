@@ -15,8 +15,16 @@ class ModelA:
     def prepare_data(self, df: pd.DataFrame):
         """
         Prepares data for training/inference.
+        Uses ONLY closed candles logic.
         """
+        # Ensure we are working on a copy
+        df = df.copy()
+        
+        # Calculate indicators
         df = add_technical_indicators(df)
+        
+        # Create Target: Direction of NEXT candle
+        # We shift(-1) so that row T has the label of T+1's return
         df = add_target_model_a(df)
         
         # Select features
@@ -31,6 +39,7 @@ class ModelA:
         Trains the model.
         """
         X, y = self.prepare_data(df)
+        # Using time-series split (no shuffle)
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
         
         print("Training Model A...")
@@ -42,11 +51,20 @@ class ModelA:
         
     def predict(self, df: pd.DataFrame):
         """
-        Predicts future direction.
+        Predicts future direction based on input data.
+        CRITICAL: Input 'df' should contain CLOSED candles.
+        If the last row is an open/incomplete candle, it should be removed before calling this,
+        OR the caller accepts that the prediction will fluctuate.
+        
+        For production safety, we assume input is history up to time T.
+        We predict T+1.
         """
-        # Ensure latest data has indicators
         df = add_technical_indicators(df)
         features = [col for col in df.columns if col not in ['open_time', 'close_time', 'future_close', 'target_return', 'target_direction']]
+        
+        # Ensure we have the exact same features as training
+        # (In a real app, save/load feature names to ensure consistency)
+        # Here we just re-select based on the column logic
         X = df[features]
         
         return self.model.predict(X)
